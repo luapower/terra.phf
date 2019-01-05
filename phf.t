@@ -9,7 +9,6 @@
 
 local ffi = require'ffi'
 local glue = require'glue'
-setfenv(1, require'low'.C)
 
 local indexof = glue.indexof
 local push = table.insert
