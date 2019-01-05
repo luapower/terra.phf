@@ -4,7 +4,7 @@
 
 --Generation at compile-time in Lua, lookup at runtime in Terra.
 --Supports primitive type keys and values as well as string keys.
---Does not support 0 as value!
+--One value must be specified as invalid and not used (defaults to 0/nil)!
 --Algorithm from http://stevehanov.ca/blog/index.php?id=119.
 
 local ffi = require'ffi'
@@ -24,8 +24,11 @@ local terra fnv_1a_hash(s: &opaque, len: int32, d: uint32)
 	return d
 end
 
-local function phf(t, ktype, vtype, thash)
+local function phf(t, ktype, vtype, thash, invalid_value)
 	thash = thash or fnv_1a_hash
+	if invalid_value == nil and not vtype:ispointer() then
+		invalid_value = 0
+	end
 	local hash
 	if ktype == 'string' then
 		hash = function(s, d)
@@ -39,9 +42,10 @@ local function phf(t, ktype, vtype, thash)
 		end
 	end
 
+
 	local n = 0
 	for k,v in pairs(t) do
-		assert(v ~= 0)
+		assert(v ~= invalid_value)
 		n = n + 1
 	end
 
@@ -70,9 +74,9 @@ local function phf(t, ktype, vtype, thash)
 			local i = 1
 			while i <= #bucket do
 				local slot = hash(bucket[i], d) % n
-				if V[slot] ~= 0 or indexof(slot, slots) then
+				if V[slot] ~= invalid_value or indexof(slot, slots) then
 					if d >= 10000 then
-						error('could not find a phf in '..d..' tries.')
+						error('could not find a phf in '..d..' tries for key '..bucket[i])
 					end
 					d = d + 1
 					tries = tries + 1
@@ -92,7 +96,7 @@ local function phf(t, ktype, vtype, thash)
 			--use a negative value of d to indicate that.
 			local freelist = {} --{slot1, ...}
 			for slot = 0, n-1 do
-				if V[slot] == 0 then
+				if V[slot] == invalid_value then
 					push(freelist, slot)
 				end
 			end
