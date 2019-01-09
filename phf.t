@@ -3,21 +3,28 @@
 --Written by Cosmin Apreutesei. Public Domain.
 
 --Generation at compile-time in Lua, lookup at runtime in Terra.
---Supports primitive type keys and values as well as string keys.
---One value must be specified as invalid and not used (defaults to 0/nil)!
+--Supports Lua string keys and any-fixed-size-type keys and values.
 --Algorithm from http://stevehanov.ca/blog/index.php?id=119.
 
+if not ... then require'phf_test'; return end
+
+--Compile-time dependencies.
 local ffi = require'ffi'
 local glue = require'glue'
 setfenv(1, require'low'.C)
-include'string.h'
+
+--Runtime dependencies.
+include'string.h' --for memcmp (for string keys)
 
 local push = table.insert
 local pop = table.remove
 local cast = ffi.cast
 local voidp_t = ffi.typeof'void*'
 
-local terra fnv_1a_hash(s: &opaque, len: int32, d: uint32)
+local hash = {} --module table
+
+--FNV-1A hash. Good for strings, too slow for integers.
+terra hash.fnv_1a(s: &opaque, len: int32, d: uint32): uint32
 	if d == 0 then d = 0x811C9DC5 end
 	for i = 0, len do
 		d = ((d ^ [&uint8](s)[i]) * 16777619) and 0x7fffffff
@@ -25,8 +32,24 @@ local terra fnv_1a_hash(s: &opaque, len: int32, d: uint32)
 	return d
 end
 
+--Knuth's multiplicative hash for (u)int32 keys.
+terra hash.mul_int32(n: &opaque, len: int32, d: uint32): uint32
+	return (@[&uint32](n) * 2654435769ULL) >> (32 - d)
+end
+
+--find the smallest n for which x <= 2^n.
+local next_pow2 = function(x)
+	return math.ceil(math.log(x) / math.log(2))
+end
+
+--Generate a O(1) `lookup(k: ktype) -> vtype` for a const table `t = {k->v}`.
+--NOTE: One value must be specified as invalid and not used (defaults to 0/nil)!
+--NOTE: The lookup function should not be used with a missing key (it will
+--return a random value from the initial set). See `phf_nofp` below for that.
 local function phf_fp(t, ktype, vtype, invalid_value, thash)
-	thash = thash or fnv_1a_hash
+	thash = thash
+		or ((ktype == int32 or ktype == uint32) and 'mul_int32' or 'fnv_1a')
+	thash = hash[thash] or thash
 	if invalid_value == nil and not vtype:ispointer() then
 		invalid_value = 0
 	end
@@ -49,6 +72,12 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 		n = n + 1
 	end
 
+	--Optimization: by increasing n to the next number that is a power of 2
+	--we enable the strength reduction compiler optimization that transforms
+	--the 10x slower modulo into bit shifting. NOTE: this only works when
+	--dividing an unsigned type by a literal!
+	n = 2^next_pow2(n)
+
 	local G = terralib.new(int32[n]) --{slot -> d|-d-1}
 	local V = terralib.new(vtype[n], invalid_value) --{d|-d-1 -> val}
 
@@ -64,6 +93,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 	table.sort(buckets, function(a, b) return #a > #b end)
 
 	local tries = 0
+	local maxtries = 0
 	for b = 1, n do
 		local bucket = buckets[b]
 		if #bucket > 1 then
@@ -75,7 +105,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 			while i <= #bucket do
 				local slot = hash(bucket[i], d) % n
 				if V[slot] ~= invalid_value or glue.indexof(slot, slots) then
-					if d >= 10000 then
+					if d >= 32 then
 						error('could not find a phf in '..d..' tries for key '..bucket[i])
 					end
 					d = d + 1
@@ -87,6 +117,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 					i = i + 1
 				end
 			end
+			maxtries = math.max(d, maxtries)
 			G[hash(bucket[1]) % n] = d
 			for i = 1, #bucket do
 				V[slots[i]] = t[bucket[i]]
@@ -113,12 +144,12 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 		end
 	end
 
-	local self = {tries = tries}
 	local G = constant(G)
 	local V = constant(V)
 	local hash = thash
+	local lookup
 	if ktype == 'string' then
-		terra self.lookup(k: &int8, len: int32)
+		terra lookup(k: &int8, len: int32)
 			var d = G[hash(k, len, 0) % n]
 			if d < 0 then
 				return V[-d-1]
@@ -127,7 +158,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 			end
 		end
 	else
-		terra self.lookup(k: ktype)
+		terra lookup(k: ktype)
 			var d = G[hash(&k, sizeof(ktype), 0) % n]
 			if d < 0 then
 				return V[-d-1]
@@ -137,13 +168,11 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 		end
 	end
 
-	return self
+	return lookup, tries, maxtries
 end
 
---NOTE: a simple phf returns a false positive when looking up a key that is
---not from the initial key set. So we keep the keys around and check the
---validity of the result against.
---TODO: Hash and anchor string keys!
+--PHF that can report missing keys by keeping the keys and validating them.
+--TODO: create a const string array for string keys.
 local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	if invalid_value == nil and not vtype:ispointer() then
 		invalid_value = 0
@@ -161,13 +190,13 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 		V[i] = v
 		i = i + 1
 	end
-	local map = phf_fp(it, ktype, int32, -1, thash)
-	local lookup = map.lookup
+	local lookup_fp, tries, maxtries = phf_fp(it, ktype, int32, -1, thash)
 	local K = constant(K)
 	local V = constant(V)
+	local lookup
 	if str then
-		map.lookup = terra(k: &int8, len: int32)
-			var i = lookup(k, len)
+		lookup = terra(k: &int8, len: int32)
+			var i = lookup_fp(k, len)
 			if memcmp(k, K[i], len) == 0 then
 				return V[i]
 			else
@@ -175,8 +204,8 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 			end
 		end
 	else
-		map.lookup = terra(k: ktype)
-			var i = lookup(k)
+		lookup = terra(k: ktype)
+			var i = lookup_fp(k)
 			if K[i] == k then
 				return V[i]
 			else
@@ -184,68 +213,12 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 			end
 		end
 	end
-	return map
+	return lookup, tries, maxtries
 end
 
 local function phf(t, ktype, vtype, invalid_value, complete_set, thash)
 	local phf = complete_set and phf_fp or phf_nofp
 	return phf(t, ktype, vtype, invalid_value, thash)
-end
-
-if not ... then --testing
-
-	local clock = require'time'.clock
-
-	local function read_words(file)
-		local t = {}
-		local i = 0
-		for s in io.lines(file) do
-			i = i + 1
-			t[s:gsub('[\n\r]', '')] = i
-		end
-		return t
-	end
-
-	local function gen_numbers(n, cov)
-		local t = {}
-		for i = 1, n do
-			t[math.random(n / cov)] = -i
-		end
-		return t
-	end
-
-	local function test(t, ktype, vtype, invalid_value, complete_set, cov)
-		local n = glue.count(t)
-		print(n..' items, '
-			..tostring(ktype)..'->'..tostring(vtype)
-			..', key space coverage: '..(cov or 'n/a')
-		)
-		local t0 = clock()
-		local map = phf(t, ktype, vtype, invalid_value, complete_set)
-		io.stdout:write(string.format(' time: %dms, second tries: %d.',
-			(clock() - t0) * 1000, map.tries))
-
-		for k,i in pairs(t) do
-			if ktype == 'string' then
-				assert(map.lookup(k, #k) == i)
-			else
-				assert(map.lookup(k) == i)
-			end
-		end
-		print' ok.'
-		return map
-	end
-
-	local map = test(read_words'media/phf/words', 'string', int32, nil, true)
-	--TODO: make phf_nofp work with strings.
-	--assert(map.lookup('invalid word', #'invalid word') == nil)
-	local map = test(gen_numbers(10, 1), int32, int32, -1, nil, 1)
-	assert(map.lookup(20) == -1)
-	local map = test(gen_numbers(100000, 1), int32, int32, nil, nil, 1)
-	assert(map.lookup(500000) == 0)
-	local map = test(gen_numbers(100000, .5), int32, int32, 0, nil, .5)
-	assert(map.lookup(500000) == 0)
-
 end
 
 return phf
