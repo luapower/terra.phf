@@ -193,7 +193,7 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	local V = constant(V)
 	local lookup
 	if str then
-		local C = require'low'.include'string.h'
+		local C = terralib.includec'string.h'
 		lookup = terra(k: &int8, len: int32)
 			var i = lookup_fp(k, len)
 			if C.memcmp(k, K[i], len) == 0 then
