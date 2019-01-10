@@ -10,16 +10,14 @@ if not ... then require'phf_test'; return end
 
 --Compile-time dependencies.
 local ffi = require'ffi'
-local glue = require'glue'
-setfenv(1, require'low'.C)
-
---Runtime dependencies.
-include'string.h' --for memcmp (for string keys)
 
 local push = table.insert
 local pop = table.remove
 local cast = ffi.cast
 local voidp_t = ffi.typeof'void*'
+
+local function indexof(v, t) for i=1,#t do if t[i] == v then return i end end end
+local function count(t) local n=0; for _ in pairs(t) do n=n+1; end; return n end
 
 local hash = {} --module table
 
@@ -104,7 +102,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 			local i = 1
 			while i <= #bucket do
 				local slot = hash(bucket[i], d) % n
-				if V[slot] ~= invalid_value or glue.indexof(slot, slots) then
+				if V[slot] ~= invalid_value or indexof(slot, slots) then
 					if d >= 32 then
 						error('could not find a phf in '..d..' tries for key '..bucket[i])
 					end
@@ -177,7 +175,7 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	if invalid_value == nil and not vtype:ispointer() then
 		invalid_value = 0
 	end
-	local n = glue.count(t)
+	local n = count(t)
 	local it = {} --{key -> index_in_vt}
 	local str = ktype == 'string'
 	local Ktype = str and &int8 or ktype
@@ -195,9 +193,10 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	local V = constant(V)
 	local lookup
 	if str then
+		local C = require'low'.include'string.h'
 		lookup = terra(k: &int8, len: int32)
 			var i = lookup_fp(k, len)
-			if memcmp(k, K[i], len) == 0 then
+			if C.memcmp(k, K[i], len) == 0 then
 				return V[i]
 			else
 				return invalid_value
