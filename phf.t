@@ -4,13 +4,17 @@
 
 --Generation at compile-time in Lua, lookup at runtime in Terra.
 --Supports Lua string keys and any-fixed-size-type keys and values.
+--It's particularly fast with (u)int32 keys.
 --Algorithm from http://stevehanov.ca/blog/index.php?id=119.
+
+--TODO: generate C switch code see if LLVM converts it to phf and check speed.
+--TODO: generate Terra if/else code and see if LLVM can see it as a switch.
+--TODO: test/compare all with binsearch and linear-search-with-a-sentinel.
 
 if not ... then require'phf_test'; return end
 
 --Compile-time dependencies.
 local ffi = require'ffi'
-
 local push = table.insert
 local pop = table.remove
 local cast = ffi.cast
@@ -19,7 +23,7 @@ local voidp_t = ffi.typeof'void*'
 local function indexof(v, t) for i=1,#t do if t[i] == v then return i end end end
 local function count(t) local n=0; for _ in pairs(t) do n=n+1; end; return n end
 
-local hash = {} --module table
+local hash = {} --{name->hash(data: &opaque, len: int32, d: uint32)}
 
 --FNV-1A hash. Good for strings, too slow for integers.
 terra hash.fnv_1a(s: &opaque, len: int32, d: uint32): uint32
