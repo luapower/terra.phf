@@ -81,7 +81,7 @@ local terra test_speed()
 			end
 		end
 	end
-	prf('%-8s hit rate: %3.0f%%, Mlookups/sec: %8.3f\n',
+	pfn('%-8s hit rate: %3.0f%%, Mlookups/sec: %8.3f',
 		[tostring(int32)], (1.0 * c / n) * 100, (n * m / 1000000.0) / (clock() - t0) )
 end
 test_speed()
