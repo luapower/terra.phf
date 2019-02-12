@@ -1,8 +1,7 @@
 
 local phf = require'phf'
-local clock = require'time'.clock
 local glue = require'glue'
-setfenv(1, require'low'.C)
+setfenv(1, require'low')
 
 local function read_words(file)
 	local t = {}
@@ -66,7 +65,6 @@ assert(lookup(500000) == -1)
 
 print()
 print'Lookup speed:'
-local clock = terralib.cast({} -> {double}, require'time'.clock)
 local terra test_speed()
 	var t0 = clock()
 	var n = 100000
