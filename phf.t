@@ -151,7 +151,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 	local hash = thash
 	local lookup
 	if ktype == 'string' then
-		terra lookup(k: &int8, len: int32)
+		terra lookup(k: rawstring, len: int32)
 			var d = G[hash(k, len, 0) % n]
 			if d < 0 then
 				return V[-d-1]
@@ -182,7 +182,7 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	local n = count(t)
 	local it = {} --{key -> index_in_vt}
 	local str = ktype == 'string'
-	local Ktype = str and &int8 or ktype
+	local Ktype = str and rawstring or ktype
 	local K = terralib.new(Ktype[n]) --{index -> key}
 	local V = terralib.new(vtype[n]) --{index -> val}
 	local i = 0
@@ -198,7 +198,7 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	local lookup
 	if str then
 		local C = terralib.includec'string.h'
-		lookup = terra(k: &int8, len: int32)
+		lookup = terra(k: rawstring, len: int32)
 			var i = lookup_fp(k, len)
 			if C.memcmp(k, K[i], len) == 0 then
 				return V[i]
