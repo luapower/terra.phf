@@ -13,19 +13,11 @@
 
 if not ... then require'phf_test'; return end
 
---Compile-time dependencies.
-local ffi = require'ffi'
-local push = table.insert
-local pop = table.remove
-local cast = ffi.cast
-local voidp_t = ffi.typeof'void*'
-
-local function indexof(v, t) for i=1,#t do if t[i] == v then return i end end end
-local function count(t) local n=0; for _ in pairs(t) do n=n+1; end; return n end
+setfenv(1, require'low')
 
 local hash = {} --{name->hash(data: &opaque, len: int32, d: uint32)}
 
---FNV-1A hash. Good for strings, too slow for integers.
+--31-bit FNV-1A hash. Good for strings, too slow for integers.
 terra hash.fnv_1a(s: &opaque, len: int32, d: uint32): uint32
 	if d == 0 then d = 0x811C9DC5 end
 	for i = 0, len do
@@ -37,11 +29,6 @@ end
 --Knuth's multiplicative hash for (u)int32 keys.
 terra hash.mul_int32(n: &opaque, len: int32, d: uint32): uint32
 	return (@[&uint32](n) * 2654435769ULL) >> (32 - d)
-end
-
---find the smallest n for which x <= 2^n.
-local next_pow2 = function(x)
-	return math.ceil(math.log(x) / math.log(2))
 end
 
 --Generate a O(1) `lookup(k: ktype) -> vtype` for a const table `t = {k->v}`.
@@ -58,7 +45,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 	local hash
 	if ktype == 'string' then
 		hash = function(s, d)
-			return thash(cast(voidp_t, s), #s, d or 0)
+			return thash(cast('void*', s), #s, d or 0)
 		end
 	else
 		local valbuf = terralib.new(ktype[1])
@@ -78,7 +65,7 @@ local function phf_fp(t, ktype, vtype, invalid_value, thash)
 	--we enable the strength reduction compiler optimization that transforms
 	--the 10x slower modulo into bit shifting. NOTE: this only works when
 	--dividing an unsigned type by a literal!
-	n = 2^next_pow2(n)
+	n = 2^nextpow2(n)
 
 	local G = terralib.new(int32[n]) --{slot -> d|-d-1}
 	local V = terralib.new(vtype[n], invalid_value) --{d|-d-1 -> val}
@@ -219,9 +206,7 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	return lookup, tries, maxtries
 end
 
-local function phf(t, ktype, vtype, invalid_value, complete_set, thash)
+low.phf = function(t, ktype, vtype, invalid_value, complete_set, thash)
 	local phf = complete_set and phf_fp or phf_nofp
 	return phf(t, ktype, vtype, invalid_value, thash)
 end
-
-return phf

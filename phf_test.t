@@ -1,7 +1,6 @@
 
-local phf = require'phf'
-local glue = require'glue'
 setfenv(1, require'low')
+require'phf'
 
 local function read_words(file)
 	local t = {}
@@ -36,7 +35,7 @@ local function test(t, ktype, vtype, invalid_value, complete_set, cov)
 		end
 	end
 
-	local n = glue.count(t)
+	local n = count(t)
 	print(string.format(
 		'%8s->%-8s items: %6d fill: %s Mkeys/s: %5.3f. second tries: %3d%%. max tries: %2d'
 		,tostring(ktype)
