@@ -206,7 +206,9 @@ local function phf_nofp(t, ktype, vtype, invalid_value, thash)
 	return lookup, tries, maxtries
 end
 
-low.phf = function(t, ktype, vtype, invalid_value, complete_set, thash)
+phf = function(t, ktype, vtype, invalid_value, complete_set, thash)
 	local phf = complete_set and phf_fp or phf_nofp
 	return phf(t, ktype, vtype, invalid_value, thash)
 end
+
+return _M
